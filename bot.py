@@ -29,12 +29,12 @@ SIDE_VOICE_LIMIT = 5       # "Préparation i - Attaque/Défense"
 
 # ------------- VALORANT Rank system -------------
 TIERS = [
-    ("iron", "Iron", 3),
+    ("iron", "iron", 3),
     ("bronze", "Bronze", 3),
-    ("silver", "Silver", 3),
+    ("argent", "Silver", 3),
     ("gold", "Gold", 3),
-    ("platinum", "Platinum", 3),
-    ("diamond", "Diamond", 3),
+    ("platine", "Platinum", 3),
+    ("diamant", "Diamond", 3),
     ("ascendant", "Ascendant", 3),
     ("immortal", "Immortal", 3),
     ("radiant", "Radiant", 1),
@@ -45,7 +45,7 @@ TIER_ALIASES = {
     "plat": "platinum",
     "platine": "platinum",
     "asc": "ascendant",
-    "imm": "immortal",
+    "imo": "immortal",
     "dia": "diamond",
     "gld": "gold",
     "silv": "silver",
@@ -161,7 +161,7 @@ PP_TEXT = [
 ]
 
 VALORANT_MAPS = [
-    "Ascent", "Bind", "Haven", "Split", "Lotus", "Sunset", "Icebox", "Breeze", "Pearl", "Fracture"
+    "Ascent", "Bind", "Haven", "Split", "Lotus", "Sunset", "Icebox", "Breeze", "Pearl", "Fracture","Corrode","Abyss"
 ]
 
 # ------------- Helpers -------------

@@ -22,7 +22,7 @@ INTENTS.message_content = False
 INTENTS.voice_states = True
 
 # Number of preparation sets
-PREP_PAIRS = 2
+PREP_PAIRS = 4
 # Limits
 PREP_VOICE_LIMIT = 10      # "Préparation i"
 SIDE_VOICE_LIMIT = 5       # "Préparation i - Attaque/Défense"

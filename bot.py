@@ -1,7 +1,8 @@
+# bot.py
 import os
+import re
 import random
 import asyncio
-import re
 from collections import defaultdict
 from typing import List, Dict, Optional, Tuple
 
@@ -17,21 +18,20 @@ GUILD_ID = os.getenv("DISCORD_GUILD_ID")  # optional
 
 INTENTS = discord.Intents.default()
 INTENTS.guilds = True
-INTENTS.members = True
+INTENTS.members = True          # ⚠️ active aussi "Server Members Intent" dans le Dev Portal
 INTENTS.messages = True
 INTENTS.message_content = False
 INTENTS.voice_states = True
 
-# Number of preparation sets
-PREP_PAIRS = 4  # <<< 4 parties perso
-# Limits
-PREP_VOICE_LIMIT = 10      # "Préparation i"
-SIDE_VOICE_LIMIT = 5       # "Préparation i - Attaque/Défense"
+# Préparations (files 5v5)
+PREP_PAIRS = 4                   # 4 parties perso
+PREP_VOICE_LIMIT = 10            # “Préparation i”
+SIDE_VOICE_LIMIT = 5             # “Attaque/Défense”
 
-# ---- Voice creator (salon perso) ----
-CREATE_VOICE_NAME = "➕ Créer un salon"  # lobby à rejoindre pour créer son salon
-TEMP_DELETE_AFTER = 60                   # auto-suppression si vide (en s)
-temp_rooms: Dict[int, dict] = {}         # vc_id -> {"owner": int, "private": bool, "limit": int, "wl": set[int], "bl": set[int], "text_id": int}
+# Voice creator (salons persos)
+CREATE_VOICE_NAME = "➕ Créer un salon"
+TEMP_DELETE_AFTER = 60  # s
+temp_rooms: Dict[int, dict] = {}     # vc_id -> {"owner": int, "private": bool, "limit": int, "wl": set[int], "bl": set[int], "text_id": int}
 delete_tasks: Dict[int, asyncio.Task] = {}
 
 # ------------- VALORANT Rank system -------------
@@ -54,7 +54,7 @@ TIER_ALIASES = {
     "or": "gold",
     "platine": "platinum",
     "diamant": "diamond",
-    # Abréviations usuelles
+    # Abréviations
     "plat": "platinum",
     "dia": "diamond",
     "asc": "ascendant",
@@ -125,7 +125,7 @@ ROLE_COLORS = {
     "Radiant": 0xFFF26B,
 }
 
-# ------------- Branding / DA (The Witcher) -------------
+# ------------- Branding / DA -------------
 ROLE_NAMES = {
     "admin": "Admin",
     "orga": "Orga PP",
@@ -140,9 +140,9 @@ SERVER_BRAND_NAME = os.getenv("SERVER_BRAND_NAME", "Arène de Kaer Morhen")
 BOT_NICKNAME = os.getenv("BOT_NICKNAME", "WOLF-BOT")
 
 CAT_WELCOME_NAME = "🐺・KAER MORHEN"
-CAT_COMMU_NAME = "🍻・TAVERNE"
-CAT_FUN_NAME = "🎻・BALLADES"
-CAT_PP_NAME = "🛡️・CONTRATS (P-P)"
+CAT_COMMU_NAME   = "🍻・TAVERNE"
+CAT_FUN_NAME     = "🎻・BALLADES"
+CAT_PP_NAME      = "🛡️・CONTRATS (P-P)"
 
 WELCOME_CHANNELS = [
     ("🐺・bienvenue", "text"),
@@ -177,40 +177,19 @@ PP_TEXT = [
 VALORANT_MAPS = [
     "Ascent", "Bind", "Haven", "Split", "Lotus", "Sunset", "Icebox", "Breeze", "Pearl", "Fracture", "Corrode", "Abyss"
 ]
-async def send_rank_prompt_dm_or_welcome(member: discord.Member):
-    """Essaye DM, sinon poste dans #bienvenue avec le bouton."""
-    view = RankPromptView(member.id)
-    # 1) DM
-    try:
-        await member.send(
-            "Bienvenue ! Déclare ton **peak ELO** pour obtenir le bon rôle (tu peux aussi faire `/set_rank`).",
-            view=view
-        )
-        return True
-    except discord.Forbidden:
-        pass
 
-    # 2) Fallback dans #bienvenue
-    try:
-        target_cat = None
-        for cat in member.guild.categories:
-            if "KAER MORHEN" in cat.name.upper() or "WELCOME" in cat.name.upper():
-                target_cat = cat; break
-        if target_cat:
-            ch = find_text_channel_by_slug(target_cat, "bienvenue")
-            if ch and ch.permissions_for(member.guild.me).send_messages:
-                await ch.send(f"{member.mention} bienvenue ! Déclare ton **peak ELO** 👇", view=view)
-                return True
-    except Exception:
-        pass
-    return False
+# ------------- Helpers noms/chercheurs -------------
+ATTACK_KEYWORD  = "attaque"
+DEFENSE_KEYWORD = "défense"
 
-# ------------- Helpers -------------
 def normalize_slug(name: str) -> str:
-    seps = ["・", "｜", "|", "—", "-", "•"]
+    seps = ["・", "｜", "|", "—", "-", "•", "·"]
     for s in seps:
         name = name.replace(s, " ")
     return " ".join(name.lower().split())
+
+def _by_position(ch):
+    return getattr(ch, "position", 0)
 
 def find_text_channel_by_slug(category: discord.CategoryChannel, slug: str):
     wanted = slug.lower()
@@ -219,14 +198,48 @@ def find_text_channel_by_slug(category: discord.CategoryChannel, slug: str):
             return ch
     return None
 
+def find_pp_category(guild: discord.Guild) -> Optional[discord.CategoryChannel]:
+    return discord.utils.get(guild.categories, name=CAT_PP_NAME)
+
+def find_group_channels_for_set(guild: discord.Guild, set_idx: int) -> Tuple[Optional[discord.VoiceChannel], Optional[discord.VoiceChannel], Optional[discord.VoiceChannel]]:
+    """
+    Retourne (prep, attaque, defense) pour 'Préparation i'.
+    On prend les 2 premiers vocs '...attaque...' et '...défense...' qui suivent ce 'Préparation i'.
+    """
+    cat = find_pp_category(guild)
+    if not cat:
+        return None, None, None
+    vcs = sorted(cat.voice_channels, key=_by_position)
+
+    prep_name = f"Préparation {set_idx}"
+    prep_slug = normalize_slug(prep_name)
+    prep = next((vc for vc in vcs if normalize_slug(vc.name) == prep_slug), None)
+    if not prep:
+        return None, None, None
+
+    attaque = defense = None
+    for vc in vcs:
+        if vc.position <= prep.position:
+            continue
+        n = normalize_slug(vc.name)
+        if (attaque is None) and (ATTACK_KEYWORD in n):
+            attaque = vc
+            continue
+        if (defense is None) and (DEFENSE_KEYWORD in n):
+            defense = vc
+            continue
+        if attaque and defense:
+            break
+    return prep, attaque, defense
+
+# ------------- Rôles -------------
 async def ensure_roles(guild: discord.Guild) -> Dict[str, discord.Role]:
-    """Create/update key roles with desired permissions."""
     existing = {r.name: r for r in guild.roles}
     result: Dict[str, discord.Role] = {}
 
     perms_admin = discord.Permissions(administrator=True)
-    perms_orga = discord.Permissions(move_members=True, mute_members=True, deafen_members=True)
-    perms_none = discord.Permissions.none()
+    perms_orga  = discord.Permissions(move_members=True, mute_members=True, deafen_members=True)
+    perms_none  = discord.Permissions.none()
 
     desired = {
         "Admin": perms_admin,
@@ -248,13 +261,12 @@ async def ensure_roles(guild: discord.Guild) -> Dict[str, discord.Role]:
                     await role.edit(permissions=perms, reason="Update role permissions")
             except discord.Forbidden:
                 pass
-        if name == "Admin": result["admin"] = role
-        elif name == "Orga PP": result["orga"] = role
-        elif name == "Staff": result["staff"] = role
-        elif name == "Joueur": result["joueur"] = role
-        elif name == "Spectateur": result["spectateur"] = role
-        elif name == "Équipe Attaque": result["team_a"] = role
-        elif name == "Équipe Défense": result["team_b"] = role
+        key = {
+            "Admin": "admin", "Orga PP": "orga", "Staff": "staff",
+            "Joueur": "joueur", "Spectateur": "spectateur",
+            "Équipe Attaque": "team_a", "Équipe Défense": "team_b"
+        }[name]
+        result[key] = role
 
     return result
 
@@ -279,6 +291,7 @@ async def apply_rank_role(guild: discord.Guild, member: discord.Member, display:
         role = await guild.create_role(name=display, color=discord.Color(color_hex), reason="Create rank role")
     await member.add_roles(role, reason="Set peak rank")
 
+# ------------- Création / limites PP -------------
 async def create_category_with_channels(guild: discord.Guild, cat_name: str, items: List[tuple]) -> discord.CategoryChannel:
     category = discord.utils.get(guild.categories, name=cat_name)
     if category is None:
@@ -293,170 +306,39 @@ async def create_category_with_channels(guild: discord.Guild, cat_name: str, ite
     return category
 
 async def create_pp_voice_structure(guild: discord.Guild, category: discord.CategoryChannel):
-    """Create N sets of voice + text channels: Préparation i (10), Attaque (5), Défense (5), prépa-i-chat (text)."""
-    existing_voice = {c.name: c for c in category.voice_channels}
-    existing_text = {c.name: c for c in category.text_channels}
+    existing_vc_by_slug = {normalize_slug(c.name): c for c in category.voice_channels}
+    existing_text = {c.name for c in category.text_channels}
+
     for i in range(1, PREP_PAIRS + 1):
         prep_name = f"Préparation {i}"
-        atk_name = f"Préparation {i} - Attaque"
-        def_name = f"Préparation {i} - Défense"
-        chat_name = f"💬・préparation-{i}-chat"
+        prep_slug = normalize_slug(prep_name)
+        prep = existing_vc_by_slug.get(prep_slug)
+        if not prep:
+            prep = await guild.create_voice_channel(prep_name, category=category, user_limit=PREP_VOICE_LIMIT)
 
-        if prep_name not in existing_voice:
-            await guild.create_voice_channel(prep_name, category=category, user_limit=PREP_VOICE_LIMIT)
-        else:
-            try:
-                await existing_voice[prep_name].edit(user_limit=PREP_VOICE_LIMIT, reason="Apply PREP_VOICE_LIMIT")
-            except discord.Forbidden:
-                pass
-        if atk_name not in existing_voice:
-            await guild.create_voice_channel(atk_name, category=category, user_limit=SIDE_VOICE_LIMIT)
-        else:
-            try:
-                await existing_voice[atk_name].edit(user_limit=SIDE_VOICE_LIMIT, reason="Apply SIDE_VOICE_LIMIT")
-            except discord.Forbidden:
-                pass
-        if def_name not in existing_voice:
-            await guild.create_voice_channel(def_name, category=category, user_limit=SIDE_VOICE_LIMIT)
-        else:
-            try:
-                await existing_voice[def_name].edit(user_limit=SIDE_VOICE_LIMIT, reason="Apply SIDE_VOICE_LIMIT")
-            except discord.Forbidden:
-                pass
+        # s'assurer d'un bloc Attaque/Défense pour ce set
+        _, attaque, defense = find_group_channels_for_set(guild, i)
+        if not attaque:
+            await guild.create_voice_channel("⚔ · Attaque", category=category, user_limit=SIDE_VOICE_LIMIT, reason="PP structure")
+        if not defense:
+            await guild.create_voice_channel("🛡 · Défense", category=category, user_limit=SIDE_VOICE_LIMIT, reason="PP structure")
+
+        chat_name = f"💬・préparation-{i}-chat"
         if chat_name not in existing_text:
             await guild.create_text_channel(chat_name, category=category)
 
 async def apply_pp_limits(guild: discord.Guild, category: discord.CategoryChannel, prep_limit: int, side_limit: int):
-    for vc in category.voice_channels:
+    for vc in sorted(category.voice_channels, key=_by_position):
         try:
-            if vc.name.startswith("Préparation ") and (" - Attaque" in vc.name or " - Défense" in vc.name):
-                await vc.edit(user_limit=side_limit, reason="Update side voice limit")
-            elif vc.name.startswith("Préparation ") and (" - " not in vc.name):
+            n = normalize_slug(vc.name)
+            if n.startswith("préparation ") and ("attaque" not in n and "défense" not in n):
                 await vc.edit(user_limit=prep_limit, reason="Update prep voice limit")
+            elif (ATTACK_KEYWORD in n) or (DEFENSE_KEYWORD in n):
+                await vc.edit(user_limit=side_limit, reason="Update side voice limit")
         except discord.Forbidden:
             pass
 
-def balance_teams(members: List[discord.Member]) -> Tuple[List[discord.Member], List[discord.Member]]:
-    def member_value(m: discord.Member) -> int:
-        best = 0
-        for r in m.roles:
-            if is_rank_role_name(r.name):
-                v = rank_value(r.name)
-                if v > best:
-                    best = v
-        return best
-    scored = sorted([(m, member_value(m)) for m in members], key=lambda x: x[1], reverse=True)
-    a, b = [], []
-    sa = sb = 0
-    for m, v in scored:
-        if sa <= sb:
-            a.append(m); sa += v
-        else:
-            b.append(m); sb += v
-    return a, b
-
-# ------------- Rules texts -------------
-SERVER_RULES_TEXT = """**RÈGLEMENT DU SERVEUR — ARÈNE DE KAER MORHEN**
-
-**1) Respect absolu** — pas d’insultes, attaques perso, propos haineux (racisme, sexisme, homophobie, etc.).
-**2) Zéro toxicité en vocal** — pas d’écrasement micro, cris, soundboard abusif. Push-to-talk recommandé.
-**3) Jeu propre** — pas de triche, ghosting, stream-snipe, macro/logiciels interdits.
-**4) Contenu & pubs** — pas de NSFW/illégal. La pub est limitée au salon `#vos-réseaux`.
-**5) Pseudos & avatars** — pas d’usurpation ni contenu choquant. Garde un pseudo proche de ton IGN.
-**6) Staff** — les décisions des **Orga PP** / **Staff** priment pour la bonne tenue des parties.
-**7) Sanctions** — avertissement → mute → kick → ban selon la gravité / récidive.
-**8) Signalements** — passe par `🆘・support` (précise date, salon, pseudo, preuve si possible).
-
-Le détail des règles pour les **Parties Perso** est dans `📜・règlement-pp`.
-Bon jeu, et reste digne d’un sorceleur 🐺 !"""
-
-PP_RULES_TEXT = """**RÈGLEMENT PARTIES PERSO — CONTRATS DE SORCELEUR (VALORANT)**
-
-1) **Respect / Zéro Toxicité** — pas d'insultes, harcèlement, racisme/sexisme. Fair-play avant tout.
-2) **Pas de triche / ghost / stream-snipe** — logiciel interdit, macro, infos inter-équipes proscrites.
-3) **Peak ELO honnête** — règle ton *peak* via `/set_rank` (ex: `Asc 1`, `Silver 2`, `Radiant`). L’équilibrage s’en sert.
-4) **Pseudo cohérent** — pseudo Discord ≈ pseudo in-game pour fluidifier l’orga.
-5) **Vocal** — **Attaque** et **Défense** pendant la game. **Préparation** pour briefing / picks.
-6) **Party Code** — uniquement dans le salon dédié. Pas de diffusion publique.
-7) **AFK / Grief** — signalez en `#support`. Récidive = sanctions.
-8) **Staff / Orga** — leurs décisions priment pour garantir une bonne expérience.
-9) **Sanctions graduées** — avertissement → mute → kick → ban selon gravité.
-
-En rejoignant une game, vous acceptez ces règles. Bonne chasse !"""
-
-async def post_server_rules(channel: discord.TextChannel):
-    try:
-        msg = await channel.send(SERVER_RULES_TEXT)
-        try:
-            await msg.pin()
-        except discord.Forbidden:
-            pass
-    except discord.Forbidden:
-        pass
-
-async def post_rules_pp(channel: discord.TextChannel):
-    try:
-        msg = await channel.send(PP_RULES_TEXT)
-        try:
-            await msg.pin()
-        except discord.Forbidden:
-            pass
-    except discord.Forbidden:
-        pass
-
-async def post_welcome_embed(channel: discord.TextChannel):
-    embed = discord.Embed(
-        title="🐺 Bienvenue à Kaer Morhen",
-        description=(
-            "Ici, les **contrats** se règlent avec fair-play.\n"
-            "🌑 Les portes sont ouvertes.\n"
-            "Reste digne, fais honneur au loup.\n"
-        ),
-        color=0x5865F2
-    )
-    embed.set_footer(text="Que la Chasse Sauvage vous épargne… GL HF !")
-    try:
-        msg = await channel.send(embed=embed)
-        try:
-            await msg.pin()
-        except discord.Forbidden:
-            pass
-    except discord.Forbidden:
-        pass
-
-# ------------- UI for rank prompt -------------
-class RankModal(discord.ui.Modal, title="Déclare ton peak ELO (VALORANT)"):
-    rank_input = discord.ui.TextInput(
-        label="Ex: Silver 1, Asc 1, Immortal 2, Radiant",
-        placeholder="asc 1",
-        required=True,
-        max_length=32
-    )
-    def __init__(self, member_id: int):
-        super().__init__()
-        self.member_id = member_id
-    async def on_submit(self, interaction: discord.Interaction):
-        guild = interaction.guild
-        if guild is None and interaction.user.mutual_guilds:
-            guild = interaction.user.mutual_guilds[0]
-        if guild is None:
-            return await interaction.response.send_message("Impossible de détecter le serveur.", ephemeral=True)
-        display = normalize_rank(str(self.rank_input.value))
-        if not display:
-            return await interaction.response.send_message("Format invalide. Exemples : `Silver 1`, `Asc 1`, `Immortal 2`, `Radiant`.", ephemeral=True)
-        member = guild.get_member(self.member_id) or interaction.user
-        await apply_rank_role(guild, member, display)
-        await interaction.response.send_message(f"✅ Ton peak a été enregistré : **{display}**.", ephemeral=True)
-
-class RankPromptView(discord.ui.View):
-    def __init__(self, member_id: int):
-        super().__init__(timeout=None)
-        self.member_id = member_id
-    @discord.ui.button(label="🎯 Déclarer mon peak ELO (VALORANT)", style=discord.ButtonStyle.primary, custom_id="rankprompt:open")
-    async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RankModal(member_id=self.member_id))
-
-# ------------- Queues & Panel per set -------------
+# ------------- Files 5v5 -------------
 class SetQueues:
     def __init__(self):
         self.queues: Dict[int, List[int]] = defaultdict(list)
@@ -486,13 +368,17 @@ def panel_embed(guild: discord.Guild, set_idx: int) -> discord.Embed:
     for uid in ids:
         m = guild.get_member(uid)
         mentions.append(m.mention if m else f"`{uid}`")
-    em = discord.Embed(title=f"Préparation {set_idx} — File 5v5", description="Rejoins la file et lance une partie équilibrée.", color=0x5865F2)
+    em = discord.Embed(
+        title=f"Préparation {set_idx} — File 5v5",
+        description="Rejoins la file et lance une partie équilibrée.",
+        color=0x5865F2
+    )
     em.add_field(name=f"Joueurs ({len(ids)}/10)", value=", ".join(mentions) if mentions else "—", inline=False)
     em.set_footer(text="Boutons: Rejoindre • Quitter • Lancer • Finir")
     return em
 
 class PanelView(discord.ui.View):
-    """Panel PERSISTANT avec custom_id : fonctionne même après un restart (tant que le bot tourne)."""
+    """Panel PERSISTANT (tant que le bot tourne)."""
     def __init__(self, set_idx: int):
         super().__init__(timeout=None)
         self.set_idx = set_idx
@@ -535,6 +421,7 @@ class PanelView(discord.ui.View):
                     await interaction.response.send_message(f"❌ Erreur: {e}", ephemeral=True)
 
         async def cb_start(interaction: discord.Interaction):
+            # Orga PP uniquement
             role_names = [r.name.lower() for r in interaction.user.roles]
             if 'orga pp' not in role_names:
                 return await interaction.response.send_message("Tu dois avoir le rôle **Orga PP** pour lancer la partie.", ephemeral=True)
@@ -549,6 +436,7 @@ class PanelView(discord.ui.View):
                 ids = set_queues.pop10(self.set_idx)
                 members = [guild.get_member(uid) for uid in ids if guild.get_member(uid)]
 
+                # équilibrage par peak (rôle de rang)
                 def member_value(m: discord.Member) -> int:
                     best = 0
                     for r in m.roles:
@@ -566,9 +454,8 @@ class PanelView(discord.ui.View):
                 roles = await ensure_roles(guild)
                 role_a, role_b = roles["team_a"], roles["team_b"]
 
-                prefix = f"Préparation {self.set_idx}"
-                attaque = discord.utils.get(guild.voice_channels, name=f"{prefix} - Attaque")
-                defense = discord.utils.get(guild.voice_channels, name=f"{prefix} - Défense")
+                # trouve les bons vocs Attaque/Défense pour ce set
+                _, attaque, defense = find_group_channels_for_set(guild, self.set_idx)
 
                 for m in team_a:
                     try: await m.add_roles(role_a, reason="Match 5v5")
@@ -613,7 +500,11 @@ class PanelView(discord.ui.View):
                             removed += 1
                         except discord.Forbidden:
                             pass
-                await interaction.followup.send(f"Rôles d'équipe retirés de **{removed}** membres.")
+
+                # reset de la file pour ce set
+                set_queues.queues[self.set_idx] = []
+
+                await interaction.followup.send(f"Rôles d'équipe retirés de **{removed}** membres. File réinitialisée.")
                 try:
                     await interaction.message.edit(embed=panel_embed(guild, self.set_idx), view=self)
                 except Exception:
@@ -628,7 +519,127 @@ class PanelView(discord.ui.View):
 
         self.add_item(b_join); self.add_item(b_leave); self.add_item(b_start); self.add_item(b_end)
 
-# --------- VOICE CREATOR (salon perso) ----------
+# ------------- Textes & embeds -------------
+SERVER_RULES_TEXT = """**RÈGLEMENT DU SERVEUR — ARÈNE DE KAER MORHEN**
+
+**1) Respect absolu** — pas d’insultes, attaques perso, propos haineux (racisme, sexisme, homophobie, etc.).
+**2) Zéro toxicité en vocal** — pas d’écrasement micro, cris, soundboard abusif. Push-to-talk recommandé.
+**3) Jeu propre** — pas de triche, ghosting, stream-snipe, macro/logiciels interdits.
+**4) Contenu & pubs** — pas de NSFW/illégal. La pub est limitée au salon `#vos-réseaux`.
+**5) Pseudos & avatars** — pas d’usurpation ni contenu choquant. Garde un pseudo proche de ton IGN.
+**6) Staff** — les décisions des **Orga PP** / **Staff** priment pour la bonne tenue des parties.
+**7) Sanctions** — avertissement → mute → kick → ban selon la gravité / récidive.
+**8) Signalements** — passe par `🆘・support` (précise date, salon, pseudo, preuve si possible).
+
+Le détail des règles pour les **Parties Perso** est dans `📜・règlement-pp`.
+Bon jeu, et reste digne d’un sorceleur 🐺 !"""
+
+PP_RULES_TEXT = """**RÈGLEMENT PARTIES PERSO — CONTRATS DE SORCELEUR (VALORANT)**
+
+1) **Respect / Zéro Toxicité** — pas d'insultes, harcèlement, racisme/sexisme. Fair-play avant tout.
+2) **Pas de triche / ghost / stream-snipe** — logiciel interdit, macro, infos inter-équipes proscrites.
+3) **Peak ELO honnête** — règle ton *peak* via `/set_rank` (ex: `Asc 1`, `Silver 2`, `Radiant`). L’équilibrage s’en sert.
+4) **Pseudo cohérent** — pseudo Discord ≈ pseudo in-game pour fluidifier l’orga.
+5) **Vocal** — **Attaque** et **Défense** pendant la game. **Préparation** pour briefing/picks.
+6) **Party Code** — uniquement dans le salon dédié. Pas de diffusion publique.
+7) **AFK / Grief** — signalez en `#support`. Récidive = sanctions.
+8) **Staff / Orga** — leurs décisions priment pour garantir une bonne expérience.
+9) **Sanctions graduées** — avertissement → mute → kick → ban selon gravité.
+
+En rejoignant une game, vous acceptez ces règles. Bonne chasse !"""
+
+async def post_server_rules(channel: discord.TextChannel):
+    try:
+        msg = await channel.send(SERVER_RULES_TEXT)
+        try: await msg.pin()
+        except discord.Forbidden: pass
+    except discord.Forbidden:
+        pass
+
+async def post_rules_pp(channel: discord.TextChannel):
+    try:
+        msg = await channel.send(PP_RULES_TEXT)
+        try: await msg.pin()
+        except discord.Forbidden: pass
+    except discord.Forbidden:
+        pass
+
+async def post_welcome_embed(channel: discord.TextChannel):
+    embed = discord.Embed(
+        title="🐺 Bienvenue à Kaer Morhen",
+        description=("Ici, les **contrats** se règlent avec fair-play.\n"
+                     "🌑 Les portes sont ouvertes.\n"
+                     "Reste digne, fais honneur au loup.\n"),
+        color=0x5865F2
+    )
+    embed.set_footer(text="Que la Chasse Sauvage vous épargne… GL HF !")
+    try:
+        msg = await channel.send(embed=embed)
+        try: await msg.pin()
+        except discord.Forbidden: pass
+    except discord.Forbidden:
+        pass
+
+# ------------- UI Peak ELO -------------
+class RankModal(discord.ui.Modal, title="Déclare ton peak ELO (VALORANT)"):
+    rank_input = discord.ui.TextInput(
+        label="Ex: Silver 1, Asc 1, Immortal 2, Radiant",
+        placeholder="asc 1",
+        required=True,
+        max_length=32
+    )
+    def __init__(self, member_id: int):
+        super().__init__()
+        self.member_id = member_id
+    async def on_submit(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        if guild is None and interaction.user.mutual_guilds:
+            guild = interaction.user.mutual_guilds[0]
+        if guild is None:
+            return await interaction.response.send_message("Impossible de détecter le serveur.", ephemeral=True)
+        display = normalize_rank(str(self.rank_input.value))
+        if not display:
+            return await interaction.response.send_message("Format invalide. Exemples : `Silver 1`, `Asc 1`, `Immortal 2`, `Radiant`.", ephemeral=True)
+        member = guild.get_member(self.member_id) or interaction.user
+        await apply_rank_role(guild, member, display)
+        await interaction.response.send_message(f"✅ Ton peak a été enregistré : **{display}**.", ephemeral=True)
+
+class RankPromptView(discord.ui.View):
+    def __init__(self, member_id: int):
+        super().__init__(timeout=None)
+        self.member_id = member_id
+    @discord.ui.button(label="🎯 Déclarer mon peak ELO (VALORANT)", style=discord.ButtonStyle.primary, custom_id="rankprompt:open")
+    async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RankModal(member_id=self.member_id))
+
+async def send_rank_prompt_dm_or_welcome(member: discord.Member):
+    """Essaye DM, sinon poste dans #bienvenue avec le bouton."""
+    view = RankPromptView(member.id)
+    # 1) DM
+    try:
+        await member.send(
+            "Bienvenue ! Déclare ton **peak ELO** pour obtenir le bon rôle (tu peux aussi faire `/set_rank`).",
+            view=view
+        )
+        return True
+    except discord.Forbidden:
+        pass
+    # 2) fallback
+    try:
+        target_cat = None
+        for cat in member.guild.categories:
+            if "KAER MORHEN" in cat.name.upper() or "WELCOME" in cat.name.upper():
+                target_cat = cat; break
+        if target_cat:
+            ch = find_text_channel_by_slug(target_cat, "bienvenue")
+            if ch and ch.permissions_for(member.guild.me).send_messages:
+                await ch.send(f"{member.mention} bienvenue ! Déclare ton **peak ELO** 👇", view=view)
+                return True
+    except Exception:
+        pass
+    return False
+
+# ------------- Salons persos (creator) -------------
 def _parse_user_id(s: str) -> Optional[int]:
     if not s:
         return None
@@ -643,17 +654,13 @@ async def _delete_room_after(vc: discord.VoiceChannel, delay: int = TEMP_DELETE_
     await asyncio.sleep(delay)
     if vc.id in temp_rooms and len(vc.members) == 0:
         info = temp_rooms.pop(vc.id, None)
-        try:
-            await vc.delete(reason="Salon perso vide (auto-delete)")
-        except Exception:
-            pass
+        try: await vc.delete(reason="Salon perso vide (auto-delete)")
+        except Exception: pass
         if info and info.get("text_id"):
             tc = vc.guild.get_channel(info["text_id"])
             if isinstance(tc, discord.TextChannel):
-                try:
-                    await tc.delete(reason="Salon perso vide (auto-delete)")
-                except Exception:
-                    pass
+                try: await tc.delete(reason="Salon perso vide (auto-delete)")
+                except Exception: pass
     delete_tasks.pop(vc.id, None)
 
 def control_embed(owner: discord.Member, vc: discord.VoiceChannel) -> discord.Embed:
@@ -662,11 +669,11 @@ def control_embed(owner: discord.Member, vc: discord.VoiceChannel) -> discord.Em
     limit = info.get("limit", 0) or "∞"
     em = discord.Embed(
         title="🎶 Contrôles du salon vocal",
-        description=f"{owner.mention}, bienvenue dans **{vc.name}**.\n\n"
-                    "• 🔒/🟢 Privé/Public\n"
-                    "• 👥 Limite de membres\n"
-                    "• ✅ Whitelist / ❌ Blacklist\n"
-                    "• 📋 Voir les listes",
+        description=(f"{owner.mention}, bienvenue dans **{vc.name}**.\n\n"
+                     "• 🔒/🟢 Privé/Public\n"
+                     "• 👥 Limite de membres\n"
+                     "• ✅ Whitelist / ❌ Blacklist\n"
+                     "• 📋 Voir les listes"),
         color=0x2b2d31
     )
     em.add_field(name="Visibilité", value=private, inline=True)
@@ -691,11 +698,9 @@ class LimitModal(discord.ui.Modal, title="Définir la limite (0 = illimité)"):
     async def on_submit(self, interaction: discord.Interaction):
         vc = interaction.guild.get_channel(self.vc_id)
         if not isinstance(vc, discord.VoiceChannel): return await interaction.response.send_message("Salon introuvable.", ephemeral=True)
-        if not can_control(interaction.user, interaction.guild, self.vc_id):
-            return await interaction.response.send_message("Tu n'es pas autorisé.", ephemeral=True)
+        if not can_control(interaction.user, interaction.guild, self.vc_id): return await interaction.response.send_message("Tu n'es pas autorisé.", ephemeral=True)
         try:
-            n = int(str(self.val))
-            n = max(0, min(99, n))
+            n = int(str(self.val)); n = max(0, min(99, n))
         except ValueError:
             return await interaction.response.send_message("Valeur invalide.", ephemeral=True)
         info = temp_rooms.get(vc.id, {})
@@ -709,8 +714,7 @@ class UserModal(discord.ui.Modal, title="Utilisateur (mention @ ou ID)"):
     async def on_submit(self, interaction: discord.Interaction):
         vc = interaction.guild.get_channel(self.vc_id)
         if not isinstance(vc, discord.VoiceChannel): return await interaction.response.send_message("Salon introuvable.", ephemeral=True)
-        if not can_control(interaction.user, interaction.guild, self.vc_id):
-            return await interaction.response.send_message("Tu n'es pas autorisé.", ephemeral=True)
+        if not can_control(interaction.user, interaction.guild, self.vc_id): return await interaction.response.send_message("Tu n'es pas autorisé.", ephemeral=True)
         uid = _parse_user_id(str(self.u))
         if not uid: return await interaction.response.send_message("Entrée invalide.", ephemeral=True)
         member = interaction.guild.get_member(uid)
@@ -787,14 +791,12 @@ async def create_personal_room(member: discord.Member, lobby: discord.VoiceChann
     cat = lobby.category
     base_name = f"🎶 {member.display_name}"
 
-    # vocal public par défaut
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=True),
         member: discord.PermissionOverwrite(view_channel=True, connect=True, move_members=True),
     }
     vc = await guild.create_voice_channel(base_name, category=cat, overwrites=overwrites, reason="Salon perso (create)")
 
-    # --- chat de contrôle avec accès Orga/Admin ---
     roles = await ensure_roles(guild)
     text_name = f"🎛️-{member.name.lower().replace(' ', '-')}-control"
     t_over = {
@@ -823,10 +825,10 @@ class FiveBot(commands.Bot):
         super().__init__(command_prefix="!", intents=INTENTS)
 
     async def setup_hook(self):
+        # panneaux de file persistants (tant que le bot est up)
         for i in range(1, PREP_PAIRS + 1):
             self.add_view(PanelView(i))
-        # enregistrer la classe ControlView (persistant tant que le bot tourne)
-        self.add_view(ControlView(0))
+        # pas de persistance pour ControlView (liaison au vc_id en mémoire)
 
         if GUILD_ID:
             gid = int(GUILD_ID)
@@ -840,14 +842,8 @@ bot = FiveBot()
 # ------------- Events -------------
 @bot.event
 async def on_member_join(member: discord.Member):
-    try:
-        view = RankPromptView(member.id)
-        await member.send(
-            "Bienvenue sur le serveur Valorant ! Déclare ton **peak ELO** pour obtenir le bon rôle. Tu peux aussi utiliser `/set_rank`.",
-            view=view
-        )
-    except discord.Forbidden:
-        pass
+    await send_rank_prompt_dm_or_welcome(member)
+    # petit embed de bienvenue
     try:
         target_cat = None
         for cat in member.guild.categories:
@@ -873,7 +869,7 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
             delete_tasks[vc.id] = asyncio.create_task(_delete_room_after(vc, TEMP_DELETE_AFTER))
 
 # ------------- Slash Commands -------------
-@bot.tree.command(description="Configurer les rôles, catégories, vocs et panneaux (thème Witcher).")
+@bot.tree.command(description="Configurer les rôles, catégories, vocs et panneaux.")
 @app_commands.checks.has_permissions(manage_guild=True)
 async def setup(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True, thinking=True)
@@ -887,7 +883,7 @@ async def setup(interaction: discord.Interaction):
     await create_pp_voice_structure(guild, cat_pp)
     await apply_pp_limits(guild, cat_pp, PREP_VOICE_LIMIT, SIDE_VOICE_LIMIT)
 
-    # Voice lobby "Créer un salon" dans la Taverne
+    # Voice lobby "Créer un salon"
     try:
         creator = discord.utils.get(cat_commu.voice_channels, name=CREATE_VOICE_NAME)
         if creator is None:
@@ -895,6 +891,7 @@ async def setup(interaction: discord.Interaction):
     except discord.Forbidden:
         pass
 
+    # Panneaux de file
     for i in range(1, PREP_PAIRS + 1):
         chat = discord.utils.get(cat_pp.text_channels, name=f"💬・préparation-{i}-chat")
         if chat:
@@ -903,12 +900,14 @@ async def setup(interaction: discord.Interaction):
             except discord.Forbidden:
                 pass
 
+    # Nom du serveur + chan système -> #bienvenue
     try:
         bienv = find_text_channel_by_slug(cat_welcome, "bienvenue")
         await guild.edit(name=SERVER_BRAND_NAME, system_channel=bienv if bienv else guild.system_channel)
     except discord.Forbidden:
         pass
 
+    # Pseudo du bot
     try:
         me = guild.me
         if me and me.nick != BOT_NICKNAME:
@@ -916,6 +915,7 @@ async def setup(interaction: discord.Interaction):
     except discord.Forbidden:
         pass
 
+    # Règles + message de bienvenue
     try:
         regles_server = find_text_channel_by_slug(cat_welcome, "règlement")
         if regles_server:
@@ -928,7 +928,7 @@ async def setup(interaction: discord.Interaction):
     except Exception:
         pass
 
-    await interaction.followup.send("✅ Setup terminé + panneaux + salon '➕ Créer un salon' prêt.", ephemeral=True)
+    await interaction.followup.send("✅ Setup terminé : catégories, vocs, panneaux et salon '➕ Créer un salon' prêts.", ephemeral=True)
 
 @bot.tree.command(description="(Re)poster les règles serveur et PP et les épingler.")
 @app_commands.checks.has_permissions(manage_guild=True)
@@ -980,7 +980,7 @@ def main():
     if not TOKEN:
         raise RuntimeError("DISCORD_BOT_TOKEN manquant. Mets-le dans .env")
 
-    # --- stay alive ---
+    # keep-alive HTTP (optionnel, si tu as keep_alive.py)
     try:
         from keep_alive import keep_alive
         keep_alive()

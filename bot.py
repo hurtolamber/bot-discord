@@ -491,12 +491,51 @@ async def ensure_rank_prompt_in_autoroles(guild:discord.Guild, cat_welcome:disco
 
 # ===================== Roulette map + votes =====================
 VALORANT_MAPS = [
-    "Ascent","Bind","Haven","Split","Lotus","Sunset","Icebox","Breeze","Pearl","Fracture","Corrode","Abyss"
+    "Ascent","Bind","Haven","Split","Lotus","Sunset",
+    "Icebox","Breeze","Pearl","Fracture","Corrode","Abyss"
 ]
 
+# --- Images officielles (op.gg / valorant-api) ---
+MAP_IMAGE: Dict[str, str] = {
+    "Haven":    "https://c-valorant-api.op.gg/Assets/Maps/2BEE0DC9-4FFE-519B-1CBD-7FBE763A6047_splash.png?image=q_auto:good,f_webp&v=1760610922",
+    "Corrode":  "https://c-valorant-api.op.gg/Assets/Maps/1C18AB1F-420D-0D8B-71D0-77AD3C439115_splash.png?image=q_auto:good,f_webp&v=1760610922",
+    "Icebox":   "https://c-valorant-api.op.gg/Assets/Maps/E2AD5C54-4114-A870-9641-8EA21279579A_splash.png?image=q_auto:good,f_webp&v=1760610922",
+    "Pearl":    "https://c-valorant-api.op.gg/Assets/Maps/FD267378-4D1D-484F-FF52-77821ED10DC2_splash.png?image=q_auto:good,f_webp&v=1760610922",
+    "Sunset":   "https://c-valorant-api.op.gg/Assets/Maps/92584FBE-486A-B1B2-9FAA-39B0F486B498_splash.png?image=q_auto:good,f_webp&v=1760610922",
+    "Lotus":    "https://c-valorant-api.op.gg/Assets/Maps/2FE4ED3A-450A-948B-6D6B-E89A78E680A9_splash.png?image=q_auto:good,f_webp&v=1760610922",
+    "Abyss":    "https://c-valorant-api.op.gg/Assets/Maps/224B0A95-48B9-F703-1BD8-67ACA101A61F_splash.png?image=q_auto:good,f_webp&v=1760610922",
+    "Breeze":   "https://c-valorant-api.op.gg/Assets/Maps/2FB9A4FD-47B8-4E7D-A969-74B4046EBD53_splash.png?image=q_auto:good,f_webp&v=1760610922",
+    "Ascent":   "https://c-valorant-api.op.gg/Assets/Maps/7EAECC1B-4337-BBF6-6AB9-04B8F06B3319_splash.png?image=q_auto:good,f_webp&v=1760610922",
+    "Split":    "https://c-valorant-api.op.gg/Assets/Maps/D960549E-485C-E861-8D71-AA9D1AED12A2_splash.png?image=q_auto:good,f_webp&v=1760610922",
+    "Fracture": "https://c-valorant-api.op.gg/Assets/Maps/B529448B-4D60-346E-E89E-00A4C527A405_splash.png?image=q_auto:good,f_webp&v=1760610922",
+    "Bind":     "https://c-valorant-api.op.gg/Assets/Maps/2C9D57EC-4431-9C5E-2939-8F9EF6DD5CBA_splash.png?image=q_auto:good,f_webp&v=1760610922",
+}
+
+# Petits alias FR/typos -> canon
+MAP_ALIASES: Dict[str, str] = {
+    "abysse": "Abyss",
+    "corode": "Corrode",
+    # tolérance aux espaces/accents si besoin
+    "ice box": "Icebox",
+}
+
 def map_image_url(name: str) -> str:
-    # Placeholder lisible partout (remplace par tes liens d’images)
+    """
+    Retourne l'URL d'image officielle pour la map.
+    Gère quelques alias FR/typos (abysse -> Abyss, corode -> Corrode, etc.).
+    Fallback = image placeholder si jamais non trouvée.
+    """
+    key = MAP_ALIASES.get(name.strip().lower(), None)
+    if key is None:
+        # normalisation simple: capitaliser exactement comme dans la liste
+        # (state.current vient déjà de VALORANT_MAPS donc c'est nickel)
+        key = name.strip()
+    url = MAP_IMAGE.get(key)
+    if url:
+        return url
+    # Dernier filet de sécurité : placeholder
     return f"https://dummyimage.com/1280x640/111827/ffffff&text={name.replace(' ', '%20')}"
+
 
 @dataclass
 class MapVoteState:

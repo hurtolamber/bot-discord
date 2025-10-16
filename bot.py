@@ -177,6 +177,33 @@ PP_TEXT = [
 VALORANT_MAPS = [
     "Ascent", "Bind", "Haven", "Split", "Lotus", "Sunset", "Icebox", "Breeze", "Pearl", "Fracture", "Corrode", "Abyss"
 ]
+async def send_rank_prompt_dm_or_welcome(member: discord.Member):
+    """Essaye DM, sinon poste dans #bienvenue avec le bouton."""
+    view = RankPromptView(member.id)
+    # 1) DM
+    try:
+        await member.send(
+            "Bienvenue ! Déclare ton **peak ELO** pour obtenir le bon rôle (tu peux aussi faire `/set_rank`).",
+            view=view
+        )
+        return True
+    except discord.Forbidden:
+        pass
+
+    # 2) Fallback dans #bienvenue
+    try:
+        target_cat = None
+        for cat in member.guild.categories:
+            if "KAER MORHEN" in cat.name.upper() or "WELCOME" in cat.name.upper():
+                target_cat = cat; break
+        if target_cat:
+            ch = find_text_channel_by_slug(target_cat, "bienvenue")
+            if ch and ch.permissions_for(member.guild.me).send_messages:
+                await ch.send(f"{member.mention} bienvenue ! Déclare ton **peak ELO** 👇", view=view)
+                return True
+    except Exception:
+        pass
+    return False
 
 # ------------- Helpers -------------
 def normalize_slug(name: str) -> str:

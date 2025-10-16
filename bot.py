@@ -71,7 +71,7 @@ PP_TEXT = [
 # Les • salon-partie-1..4 sont créés/vérifiés à part
 
 # Mots-clés pour détecter les vocs
-ATTACK_KEYWORDS  = {"attaque", "att", "atk"}
+ACK_KEYWORDS  = {"attaque", "att", "atk"}
 DEFENSE_KEYWORDS = {"défense", "defense", "def"}
 
 def slug(s: str) -> str:
@@ -215,7 +215,7 @@ async def create_pp_voice_structure(guild: discord.Guild, cat: discord.CategoryC
         # ⚔ / 🛡
         _, atk, defn = find_group_channels_for_set(guild, i)
         if not atk:
-            await guild.create_voice_channel(":crossed_swords:⚔️ · Attaque", category=cat, user_limit=SIDE_VOICE_LIMIT)
+            await guild.create_voice_channel("⚔️ · Attaque", category=cat, user_limit=SIDE_VOICE_LIMIT)
         else:
             if not has_attack(atk.name):
                 try: await atk.edit(name="⚔️ · Attaque")
@@ -257,7 +257,7 @@ async def ensure_roles(guild: discord.Guild) -> Dict[str, discord.Role]:
                     await role.edit(permissions=perms, reason="Update role perms")
             except discord.Forbidden:
                 pass
-        key = {"Admin":"admin","Orga PP":"orga","Staff":"staff","Joueur":"joueur","Spectateur":"spectateur","Équipe Attaque":"team_a","Équipe Défense":"team_b"}[name]
+        key = {"Admin":"admin","Orga PP":"orga","Staff":"staff","Joueur":"joueur","Spectateur":"spectateur","Équipe aque":"team_a","Équipe Défense":"team_b"}[name]
         out[key] = role
     return out
 
@@ -367,7 +367,7 @@ class PanelView(discord.ui.View):
                     except: pass
 
             em=discord.Embed(title=f"Match lancé — Préparation {self.set_idx}", description="Équilibrage par peak ELO.", color=0x2ecc71)
-            em.add_field(name="Équipe Attaque", value=", ".join(m.mention for m in A) or "—", inline=False)
+            em.add_field(name="Équipe aque", value=", ".join(m.mention for m in A) or "—", inline=False)
             em.add_field(name="Équipe Défense", value=", ".join(m.mention for m in B) or "—", inline=False)
             await inter.followup.send(embed=em)
 
@@ -406,7 +406,7 @@ Respect, jeu propre, pas de triche/ghost, pubs limitées, décisions Orga PP/Sta
 Le détail des règles PP est dans `📜・règlement-pp`. Bon jeu 🐺 !
 """
 PP_RULES_TEXT = """**RÈGLEMENT PARTIES PERSO — VALORANT**
-Fair-play, pas de triche, vocal Attaque/Défense, party-code privé, sanctions graduées.
+Fair-play, pas de triche, vocal aque/Défense, party-code privé, sanctions graduées.
 """
 
 async def post_server_rules(ch:discord.TextChannel):
@@ -827,7 +827,7 @@ async def setup(inter:discord.Interaction):
 
     # Panneaux : file 5v5 + roulette map
     for i in range(1, PREP_PAIRS+1):
-        chat = next((t for t in cat_pp.text_channels if slug(t.name) in (slug(f"• salon-partie-{i}"), slug(f"salon-partie-{i}"))), None)
+        chat = next((t for t in cat_pp.text_channels if slug(t.name) in (slug(f"🗨️salon-partie-{i}"), slug(f"salon-partie-{i}"))), None)
         if chat:
             await ensure_panel_once(chat, panel_embed(g,i), PanelView(i))
             await ensure_mapvote_panel_once(chat, i)

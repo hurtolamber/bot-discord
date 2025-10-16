@@ -18,7 +18,7 @@ GUILD_ID = os.getenv("DISCORD_GUILD_ID")  # optionnel
 
 INTENTS = discord.Intents.default()
 INTENTS.guilds = True
-INTENTS.members = True               # ⚠️ active aussi "Server Members Intent" dans le Dev Portal
+INTENTS.members = True               # ⚠️ active "Server Members Intent" dans le Dev Portal
 INTENTS.voice_states = True
 INTENTS.messages = True
 INTENTS.message_content = False
@@ -26,15 +26,15 @@ INTENTS.message_content = False
 # Parties perso
 PREP_PAIRS = 4
 PREP_VOICE_LIMIT = 10
-SIDE_VOICE_LIMIT = 5
+SIDE_VOICE_LIMIT  = 5
 
 # Créateur de salon vocal
-CREATE_VOICE_NAME = "➕ Créer un salon"
-TEMP_DELETE_GRACE = 60  # secondes après salon vide avant suppression
+CREATE_VOICE_NAME   = "➕ Créer un salon"
+TEMP_DELETE_GRACE_S = 60  # secondes après salon vide avant suppression
 
 # DA / Noms de catégories
 SERVER_BRAND_NAME = os.getenv("SERVER_BRAND_NAME", "Arène de Kaer Morhen")
-BOT_NICKNAME = os.getenv("BOT_NICKNAME", "WOLF-BOT")
+BOT_NICKNAME      = os.getenv("BOT_NICKNAME", "WOLF-BOT")
 
 CAT_WELCOME_NAME = "🐺・KAER MORHEN"
 CAT_COMMU_NAME   = "🍻・TAVERNE"
@@ -62,20 +62,19 @@ COMMU_CHANNELS = [
     ("🔗・vos-réseaux", "text"),
 ]
 PP_TEXT = [
-    ("🛡️・lasts-pp", "text"),
+    ("🛡️・contrats-pp", "text"),
     ("📜・règlement-pp", "text"),
     ("🏷️・party-code", "text"),
     ("🎲・roulette-maps", "text"),
     ("🧭・demande-orga-pp", "text"),
 ]
-# Les • salon-partie-1..4 sont créés/vérifiés à part
 
-# Mots-clés pour détecter les vocs
-ACK_KEYWORDS  = {"attaque", "att", "atk"}
+# Mots-clés pour détecter les vocs (souple avec emojis/variantes)
+ATTACK_KEYWORDS  = {"attaque", "att", "atk"}
 DEFENSE_KEYWORDS = {"défense", "defense", "def"}
 
 def slug(s: str) -> str:
-    for sep in ["・","｜","|","—","-","•","·"]:
+    for sep in ["・","｜","|","—","-","•","·","• "]:
         s = s.replace(sep, " ")
     return " ".join(s.lower().split())
 
@@ -96,7 +95,6 @@ TIERS = [
 TIER_INDEX = {k:i for i,(k,_,_) in enumerate(TIERS)}
 TIER_META  = {k:(label,divs) for k,label,divs in TIERS}
 TIER_ALIASES = {
-    # FR + abréviations usuelles
     "argent":"silver","or":"gold","platine":"platinum","diamant":"diamond",
     "plat":"platinum","dia":"diamond","asc":"ascendant","imm":"immortal","imo":"immortal",
     "rad":"radiant","gld":"gold","silv":"silver","bron":"bronze","unrank":"iron",
@@ -186,8 +184,19 @@ async def ensure_party_text_channels(guild: discord.Guild, cat: discord.Category
         if s not in existing:
             await guild.create_text_channel(f"• salon-partie-{i}", category=cat, reason="PP party chat")
 
+def get_party_text_channel(guild: discord.Guild, i: int) -> Optional[discord.TextChannel]:
+    """Trouve le salon texte 'partie i' (robuste aux emojis/variantes)."""
+    cat = pp_category(guild)
+    if not cat:
+        return None
+    target = f"salon partie {i}"
+    for ch in cat.text_channels:
+        if target in slug(ch.name):
+            return ch
+    return None
+
 def find_group_channels_for_set(guild: discord.Guild, i: int) -> Tuple[Optional[discord.VoiceChannel], Optional[discord.VoiceChannel], Optional[discord.VoiceChannel]]:
-    """Retourne (Préparation i, aque, Défense) en bornant entre Préparation i et la suivante."""
+    """Retourne (Préparation i, Attaque, Défense) en bornant entre Préparation i et la suivante."""
     cat = pp_category(guild)
     if not cat: return None, None, None
     vcs = sorted(cat.voice_channels, key=lambda c: c.position)
@@ -197,15 +206,15 @@ def find_group_channels_for_set(guild: discord.Guild, i: int) -> Tuple[Optional[
     # Limite haute = prochaine Préparation
     next_idx = next((k for k in range(prep_idx+1, len(vcs)) if slug(vcs[k].name).startswith("préparation ")), len(vcs))
     window = vcs[prep_idx+1:next_idx]
-    atk = next((vc for vc in window if has_ack(vc.name)), None)
+    atk = next((vc for vc in window if has_attack(vc.name)), None)
     defn = next((vc for vc in window if has_defense(vc.name)), None)
     return vcs[prep_idx], atk, defn
 
 async def create_pp_voice_structure(guild: discord.Guild, cat: discord.CategoryChannel):
-    """Crée/renomme Préparation i + aque/Défense (avec emojis) et applique les limites."""
+    """Crée/ajuste Préparation i + Attaque/Défense (avec emojis) et applique les limites."""
     for i in range(1, PREP_PAIRS+1):
         # Préparation i
-        prep = discord.utils.find(lambda vc: slug(vc.name)==slug(f"Préparation {i}"), cat.voice_channels)
+        prep = discord.utils.find(lambda vc: slug(vc.name)==slug(f"préparation {i}"), cat.voice_channels)
         if not prep:
             await guild.create_voice_channel(f"Préparation {i}", category=cat, user_limit=PREP_VOICE_LIMIT)
         else:
@@ -215,18 +224,18 @@ async def create_pp_voice_structure(guild: discord.Guild, cat: discord.CategoryC
         # ⚔ / 🛡
         _, atk, defn = find_group_channels_for_set(guild, i)
         if not atk:
-            await guild.create_voice_channel("⚔️ · Attaque", category=cat, user_limit=SIDE_VOICE_LIMIT)
+            await guild.create_voice_channel("⚔ · Attaque", category=cat, user_limit=SIDE_VOICE_LIMIT)
         else:
             if not has_attack(atk.name):
-                try: await atk.edit(name="⚔️ · Attaque")
+                try: await atk.edit(name="⚔ · Attaque")
                 except: pass
             try: await atk.edit(user_limit=SIDE_VOICE_LIMIT)
             except: pass
         if not defn:
-            await guild.create_voice_channel("🛡️ · Défense", category=cat, user_limit=SIDE_VOICE_LIMIT)
+            await guild.create_voice_channel("🛡 · Défense", category=cat, user_limit=SIDE_VOICE_LIMIT)
         else:
             if not has_defense(defn.name):
-                try: await defn.edit(name="🛡️ · Défense")
+                try: await defn.edit(name="🛡 · Défense")
                 except: pass
             try: await defn.edit(user_limit=SIDE_VOICE_LIMIT)
             except: pass
@@ -257,7 +266,7 @@ async def ensure_roles(guild: discord.Guild) -> Dict[str, discord.Role]:
                     await role.edit(permissions=perms, reason="Update role perms")
             except discord.Forbidden:
                 pass
-        key = {"Admin":"admin","Orga PP":"orga","Staff":"staff","Joueur":"joueur","Spectateur":"spectateur","Équipe aque":"team_a","Équipe Défense":"team_b"}[name]
+        key = {"Admin":"admin","Orga PP":"orga","Staff":"staff","Joueur":"joueur","Spectateur":"spectateur","Équipe Attaque":"team_a","Équipe Défense":"team_b"}[name]
         out[key] = role
     return out
 
@@ -265,7 +274,7 @@ async def ensure_roles(guild: discord.Guild) -> Dict[str, discord.Role]:
 class SetQueues:
     def __init__(self): self.queues: Dict[int, List[int]] = {i: [] for i in range(1, PREP_PAIRS+1)}
     def join(self, i:int, uid:int)->bool:
-        q=self.queues[i]; 
+        q=self.queues[i]
         if uid in q: return False
         q.append(uid); return True
     def leave(self,i:int,uid:int)->bool:
@@ -303,6 +312,22 @@ async def ensure_panel_once(chat:discord.TextChannel, embed:discord.Embed, view:
     msg = await chat.send(embed=embed, view=view)
     try: await msg.pin()
     except: pass
+
+async def purge_channel_messages(chat: discord.TextChannel, keep_pins: bool = True, limit: int = 500):
+    """Efface les messages récents du salon (sauf pins si keep_pins=True)."""
+    pins = []
+    if keep_pins:
+        try:
+            pins = await chat.pins()
+        except:
+            pins = []
+    pinned_ids = {m.id for m in pins}
+    try:
+        await chat.purge(limit=limit, check=(lambda m: m.id not in pinned_ids))
+    except discord.Forbidden:
+        pass
+    except Exception:
+        pass
 
 class PanelView(discord.ui.View):
     def __init__(self,set_idx:int):
@@ -367,7 +392,7 @@ class PanelView(discord.ui.View):
                     except: pass
 
             em=discord.Embed(title=f"Match lancé — Préparation {self.set_idx}", description="Équilibrage par peak ELO.", color=0x2ecc71)
-            em.add_field(name="Équipe aque", value=", ".join(m.mention for m in A) or "—", inline=False)
+            em.add_field(name="Équipe Attaque", value=", ".join(m.mention for m in A) or "—", inline=False)
             em.add_field(name="Équipe Défense", value=", ".join(m.mention for m in B) or "—", inline=False)
             await inter.followup.send(embed=em)
 
@@ -388,12 +413,21 @@ class PanelView(discord.ui.View):
                         await m.remove_roles(key_roles["team_a"], key_roles["team_b"], reason="Match terminé")
                         removed += 1
                     except: pass
+            # Reset file + votes
             set_queues.queues[self.set_idx] = []
-            # reset map vote aussi si tu veux un clean total :
             if self.set_idx in map_votes:
                 mv = map_votes[self.set_idx]
                 mv.voters.clear(); mv.yes=0; mv.no=0; mv.locked=False
-            await inter.followup.send(f"Rôles retirés de **{removed}** membres. File réinitialisée.")
+
+            # CLEAR le salon-partie-i (messages non épinglés) et replanter les panneaux
+            chat = get_party_text_channel(guild, self.set_idx)
+            if chat:
+                await purge_channel_messages(chat, keep_pins=True, limit=500)
+                # Repost panel + roulette tout de suite
+                await ensure_panel_once(chat, panel_embed(guild, self.set_idx), PanelView(self.set_idx))
+                await ensure_mapvote_panel_once(chat, self.set_idx)
+
+            await inter.followup.send(f"Rôles retirés de **{removed}** membres. File réinitialisée. Salon-partie nettoyé.", ephemeral=True)
             try: await inter.message.edit(embed=panel_embed(guild,self.set_idx), view=self)
             except: pass
 
@@ -406,7 +440,7 @@ Respect, jeu propre, pas de triche/ghost, pubs limitées, décisions Orga PP/Sta
 Le détail des règles PP est dans `📜・règlement-pp`. Bon jeu 🐺 !
 """
 PP_RULES_TEXT = """**RÈGLEMENT PARTIES PERSO — VALORANT**
-Fair-play, pas de triche, vocal aque/Défense, party-code privé, sanctions graduées.
+Fair-play, pas de triche, vocal Attaque/Défense, party-code privé, sanctions graduées.
 """
 
 async def post_server_rules(ch:discord.TextChannel):
@@ -461,7 +495,7 @@ VALORANT_MAPS = [
 ]
 
 def map_image_url(name: str) -> str:
-    # Placeholder lisible partout (remplace par tes liens d'images si tu en as)
+    # Placeholder lisible partout (remplace par tes liens d’images)
     return f"https://dummyimage.com/1280x640/111827/ffffff&text={name.replace(' ', '%20')}"
 
 @dataclass
@@ -469,7 +503,7 @@ class MapVoteState:
     current: str
     voters: Dict[int, str] = field(default_factory=dict)  # user_id -> "yes" / "no"
     yes: int = 0
-    no: int = 0
+    no: int  = 0
     locked: bool = False  # true = acceptée
 
 map_votes: Dict[int, MapVoteState] = {}
@@ -555,9 +589,8 @@ class MapVoteView(discord.ui.View):
             await inter.followup.send("🎲 Nouvelle map proposée.", ephemeral=True)
 
         b_yes.callback = cb_yes
-        b_no.callback = cb_no
+        b_no.callback  = cb_no
         b_reroll.callback = cb_reroll
-
         self.add_item(b_yes); self.add_item(b_no); self.add_item(b_reroll)
 
 async def ensure_mapvote_panel_once(chat: discord.TextChannel, set_idx: int):
@@ -580,9 +613,9 @@ async def ensure_mapvote_panel_once(chat: discord.TextChannel, set_idx: int):
 class TempRoom:
     owner_id: int
     voice_id: int
-    text_id: int
+    text_id:  int
     private: bool = False
-    limit: int = 0
+    limit:   int  = 0
     whitelist: Set[int] = field(default_factory=set)
     blacklist: Set[int] = field(default_factory=set)
 
@@ -723,7 +756,7 @@ class VoiceControlView(discord.ui.View):
         await interaction.response.send_message(f"**Whitelist**: {wl}\n**Blacklist**: {bl}", ephemeral=True)
 
 async def start_delete_timer(guild: discord.Guild, voice_id: int):
-    await asyncio.sleep(TEMP_DELETE_GRACE)
+    await asyncio.sleep(TEMP_DELETE_GRACE_S)
     room = temp_rooms.get(voice_id)
     if not room: return
     vc = guild.get_channel(voice_id)
@@ -758,7 +791,7 @@ bot = FiveBot()
 
 @bot.event
 async def on_member_join(member: discord.Member):
-    # plus de DM : ping vers auto-rôles
+    # pas de DM : ping vers auto-rôles
     try:
         cat=discord.utils.get(member.guild.categories, name=CAT_WELCOME_NAME)
         if cat:
@@ -825,12 +858,13 @@ async def setup(inter:discord.Interaction):
     await create_pp_voice_structure(g, cat_pp)
     await ensure_party_text_channels(g, cat_pp, count=PREP_PAIRS)
 
-    # Panneaux : file 5v5 + roulette map
+    # Panneaux : file 5v5 + roulette map (détection robuste des salons-partie)
     for i in range(1, PREP_PAIRS+1):
-        chat = next((t for t in cat_pp.text_channels if slug(t.name) in (slug(f"🗨️salon-partie-{i}"), slug(f"salon-partie-{i}"))), None)
-        if chat:
-            await ensure_panel_once(chat, panel_embed(g,i), PanelView(i))
-            await ensure_mapvote_panel_once(chat, i)
+        chat = get_party_text_channel(g, i)
+        if not chat:
+            continue
+        await ensure_panel_once(chat, panel_embed(g, i), PanelView(i))
+        await ensure_mapvote_panel_once(chat, i)
 
     # Peak ELO dans auto-rôles
     await ensure_rank_prompt_in_autoroles(g, cat_welcome)
@@ -865,7 +899,7 @@ async def party_code(inter:discord.Interaction, partie:app_commands.Choice[int],
         return await inter.response.send_message("Commande réservée aux **Orga PP** / Admin.", ephemeral=True)
     cat = pp_category(inter.guild)
     if not cat: return await inter.response.send_message("Catégorie PP introuvable.", ephemeral=True)
-    ch = next((t for t in cat.text_channels if slug(t.name) in (slug(f"• salon-partie-{partie.value}"), slug(f"salon-partie-{partie.value}"))), None)
+    ch = get_party_text_channel(inter.guild, partie.value)
     if not ch: return await inter.response.send_message("salon-partie introuvable.", ephemeral=True)
 
     embed = discord.Embed(title=f"🎮 Party Code — Partie {partie.value}", description=f"**Code :** `{code}`\nSalon associé : **Préparation {partie.value}**", color=0x2ecc71)
@@ -873,6 +907,27 @@ async def party_code(inter:discord.Interaction, partie:app_commands.Choice[int],
     try: await ch.edit(topic=f"Party code actuel: {code} (partie {partie.value})")
     except: pass
     await inter.response.send_message(f"✅ Code posté dans {ch.mention}", ephemeral=True)
+
+@bot.tree.command(description="(Re)poser la roulette map dans chaque salon-partie existant.")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def map_seed(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    g = interaction.guild
+    ok, miss = [], []
+    for i in range(1, PREP_PAIRS + 1):
+        chat = get_party_text_channel(g, i)
+        if not chat:
+            miss.append(i); 
+            continue
+        try:
+            await ensure_mapvote_panel_once(chat, i)
+            ok.append(i)
+        except Exception:
+            miss.append(i)
+    text = []
+    if ok:   text.append("✅ Roulette posée pour: " + ", ".join(map(str, ok)))
+    if miss: text.append("⚠️ Introuvable: " + ", ".join(map(str, miss)) + " (crée les salons-partie manquants)")
+    await interaction.followup.send("\n".join(text) or "Rien à faire.", ephemeral=True)
 
 @bot.tree.command(description="Définir ton peak ELO (VALORANT).")
 @app_commands.describe(valeur="Ex: 'silver 1', 'asc 1', 'immortal 2', 'radiant'")

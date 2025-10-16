@@ -62,7 +62,7 @@ COMMU_CHANNELS = [
     ("🔗・vos-réseaux", "text"),
 ]
 PP_TEXT = [
-    ("🛡️・contrats-pp", "text"),
+    ("🛡️・lasts-pp", "text"),
     ("📜・règlement-pp", "text"),
     ("🏷️・party-code", "text"),
     ("🎲・roulette-maps", "text"),

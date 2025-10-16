@@ -182,7 +182,7 @@ async def ensure_party_text_channels(guild: discord.Guild, cat: discord.Category
     for i in range(1, count+1):
         s = f"salon partie {i}"
         if s not in existing:
-            await guild.create_text_channel(f"• salon-partie-{i}", category=cat, reason="PP party chat")
+            await guild.create_text_channel(f"🗨️salon-partie-{i}", category=cat, reason="PP party chat")
 
 def get_party_text_channel(guild: discord.Guild, i: int) -> Optional[discord.TextChannel]:
     """Trouve le salon texte 'partie i' (robuste aux emojis/variantes)."""

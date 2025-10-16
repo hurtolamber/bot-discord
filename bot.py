@@ -246,6 +246,31 @@ async def ensure_roles(guild: discord.Guild) -> Dict[str, discord.Role]:
         key = {"Admin":"admin","Orga PP":"orga","Staff":"staff","Joueur":"joueur","Spectateur":"spectateur","Équipe Attaque":"team_a","Équipe Défense":"team_b"}[name]
         out[key] = role
     return out
+# --- MAPS & images pour la roulette ---
+VALORANT_MAPS = [
+    "Ascent","Bind","Haven","Split","Lotus","Sunset",
+    "Icebox","Breeze","Pearl","Fracture","Corrode","Abyss"
+]
+
+def map_image_url(name: str) -> str:
+    # image lisible partout (remplace par de vrais visuels si tu veux)
+    return f"https://dummyimage.com/1280x640/111827/ffffff&text={name.replace(' ', '%20')}"
+
+# --- État de vote par partie ---
+from dataclasses import dataclass, field
+from typing import Dict
+
+@dataclass
+class MapVoteState:
+    current: str
+    voters: Dict[int, str] = field(default_factory=dict)  # user_id -> "yes" / "no"
+    yes: int = 0
+    no: int = 0
+    locked: bool = False  # true si "acceptée"
+
+map_votes: Dict[int, MapVoteState] = {}
+VOTE_THRESHOLD_ACCEPT = 5
+VOTE_THRESHOLD_REJECT = 5
 
 # ------------------ Files & panneaux 5v5 ------------------
 class SetQueues:
@@ -381,6 +406,26 @@ class PanelView(discord.ui.View):
 
         b_join.callback=cb_join; b_leave.callback=cb_leave; b_start.callback=cb_start; b_end.callback=cb_end
         self.add_item(b_join); self.add_item(b_leave); self.add_item(b_start); self.add_item(b_end)
+import random
+import discord
+
+def roll_random_map(exclude: str | None = None) -> str:
+    pool = [m for m in VALORANT_MAPS if m != exclude] if exclude else VALORANT_MAPS
+    return random.choice(pool) if pool else random.choice(VALORANT_MAPS)
+
+def build_map_embed(set_idx: int, state: MapVoteState) -> discord.Embed:
+    title = f"🗺️ Roulette map — Partie {set_idx}"
+    desc  = f"**Map proposée :** **{state.current}**\n\n" \
+            f"**Votes** — ✅ Oui: **{state.yes}/{VOTE_THRESHOLD_ACCEPT}** • ❌ Non: **{state.no}/{VOTE_THRESHOLD_REJECT}**\n" \
+            f"*(1 vote par personne)*"
+    color = 0x2ecc71 if state.locked else 0x5865F2
+    em = discord.Embed(title=title, description=desc, color=color)
+    em.set_image(url=map_image_url(state.current))
+    if state.locked:
+        em.set_footer(text="✅ Map acceptée")
+    else:
+        em.set_footer(text="Votez avec les boutons ci-dessous")
+    return em
 
 # ------------------ Embeds de base ------------------
 SERVER_RULES_TEXT = """**RÈGLEMENT DU SERVEUR — ARÈNE DE KAER MORHEN**
@@ -600,6 +645,7 @@ async def start_delete_timer(guild: discord.Guild, voice_id: int):
         except: pass
         temp_rooms.pop(voice_id, None)
         delete_tasks.pop(voice_id, None)
+        
 
 # ------------------ Bot ------------------
 class FiveBot(commands.Bot):
@@ -615,6 +661,96 @@ class FiveBot(commands.Bot):
             await self.tree.sync()
 
 bot = FiveBot()
+
+# ------------------ MapVoteView ------------------
+class MapVoteView(discord.ui.View):
+    """Vue PERSISTANTE pour la roulette de map d'une Partie i."""
+    def __init__(self, set_idx: int):
+        super().__init__(timeout=None)
+        self.set_idx = set_idx
+
+        b_yes    = discord.ui.Button(label="✅ Oui", style=discord.ButtonStyle.success,   custom_id=f"mapvote:yes:{set_idx}")
+        b_no     = discord.ui.Button(label="❌ Non", style=discord.ButtonStyle.danger,    custom_id=f"mapvote:no:{set_idx}")
+        b_reroll = discord.ui.Button(label="🎲 Relancer (Orga)", style=discord.ButtonStyle.secondary, custom_id=f"mapvote:reroll:{set_idx}")
+
+        async def cb_yes(inter: discord.Interaction):
+            state = map_votes.get(self.set_idx)
+            if not state:
+                state = map_votes[self.set_idx] = MapVoteState(current=roll_random_map())
+            if state.locked:
+                return await inter.response.send_message("La map est déjà acceptée.", ephemeral=True)
+            uid = inter.user.id
+            if uid in state.voters:
+                return await inter.response.send_message("Tu as déjà voté.", ephemeral=True)
+            state.voters[uid] = "yes"
+            state.yes += 1
+            # Acceptation ?
+            if state.yes >= VOTE_THRESHOLD_ACCEPT:
+                state.locked = True
+            await inter.response.edit_message(embed=build_map_embed(self.set_idx, state), view=self)
+            await inter.followup.send("Vote enregistré ✅", ephemeral=True)
+
+        async def cb_no(inter: discord.Interaction):
+            state = map_votes.get(self.set_idx)
+            if not state:
+                state = map_votes[self.set_idx] = MapVoteState(current=roll_random_map())
+            if state.locked:
+                return await inter.response.send_message("La map est déjà acceptée.", ephemeral=True)
+            uid = inter.user.id
+            if uid in state.voters:
+                return await inter.response.send_message("Tu as déjà voté.", ephemeral=True)
+            state.voters[uid] = "no"
+            state.no += 1
+            # Rejet => auto reroll
+            rerolled = False
+            if state.no >= VOTE_THRESHOLD_REJECT:
+                old = state.current
+                state.current = roll_random_map(exclude=old)
+                state.voters.clear()
+                state.yes = 0
+                state.no = 0
+                rerolled = True
+            await inter.response.edit_message(embed=build_map_embed(self.set_idx, state), view=self)
+            if rerolled:
+                await inter.followup.send("❌ Refusé (5 non). 🎲 Nouvelle map proposée !", ephemeral=True)
+            else:
+                await inter.followup.send("Vote enregistré ❌", ephemeral=True)
+
+        async def cb_reroll(inter: discord.Interaction):
+            # Orga PP / Admin uniquement
+            if not (inter.user.guild_permissions.administrator or any(r.name.lower()=="orga pp" for r in inter.user.roles)):
+                return await inter.response.send_message("Réservé aux **Orga PP** / Admin.", ephemeral=True)
+            state = map_votes.get(self.set_idx)
+            if not state:
+                state = map_votes[self.set_idx] = MapVoteState(current=roll_random_map())
+            old = state.current
+            state.current = roll_random_map(exclude=old)
+            state.voters.clear(); state.yes = 0; state.no = 0; state.locked = False
+            await inter.response.edit_message(embed=build_map_embed(self.set_idx, state), view=self)
+            await inter.followup.send("🎲 Nouvelle map proposée.", ephemeral=True)
+
+        b_yes.callback = cb_yes
+        b_no.callback = cb_no
+        b_reroll.callback = cb_reroll
+
+        self.add_item(b_yes); self.add_item(b_no); self.add_item(b_reroll)
+
+
+async def ensure_mapvote_panel_once(chat: discord.TextChannel, set_idx: int):
+    title = f"🗺️ Roulette map — Partie {set_idx}"
+    try:
+        for m in await chat.pins():
+            if m.author == chat.guild.me and m.embeds and m.embeds[0].title == title:
+                return
+    except: pass
+    async for m in chat.history(limit=30):
+        if m.author == chat.guild.me and m.embeds and m.embeds[0].title == title:
+            return
+    # état initial
+    map_votes[set_idx] = MapVoteState(current=roll_random_map())
+    msg = await chat.send(embed=build_map_embed(set_idx, map_votes[set_idx]), view=MapVoteView(set_idx))
+    try: await msg.pin()
+    except: pass
 
 # ------------------ Events ------------------
 @bot.event

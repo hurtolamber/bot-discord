@@ -547,7 +547,6 @@ def build_map_embed(set_idx: int, state: MapVoteState) -> discord.Embed:
     return em
 
 class MapVoteView(discord.ui.View):
-    """Vue persistante : Oui / Non / Relancer (Orga)."""
     def __init__(self, set_idx: int):
         super().__init__(timeout=None)
         self.set_idx = set_idx
@@ -557,30 +556,33 @@ class MapVoteView(discord.ui.View):
         b_reroll = discord.ui.Button(label="🎲 Relancer (Orga)", style=discord.ButtonStyle.secondary, custom_id=f"mapvote:reroll:{set_idx}")
 
         async def cb_yes(inter: discord.Interaction):
-            state = map_votes.get(self.set_idx)
-            if not state:
-                state = map_votes[self.set_idx] = MapVoteState(current=roll_random_map())
+            # ✅ accuse réception tout de suite (évite “échec de l’interaction”)
+            await inter.response.defer(thinking=False, ephemeral=True)
+            state = map_votes.setdefault(self.set_idx, MapVoteState(current=roll_random_map()))
             if state.locked:
-                return await inter.response.send_message("La map est déjà acceptée.", ephemeral=True)
+                return await inter.followup.send("La map est déjà acceptée.", ephemeral=True)
             uid = inter.user.id
             if uid in state.voters:
-                return await inter.response.send_message("Tu as déjà voté.", ephemeral=True)
+                return await inter.followup.send("Tu as déjà voté.", ephemeral=True)
             state.voters[uid] = "yes"
             state.yes += 1
             if state.yes >= VOTE_THRESHOLD_ACCEPT:
                 state.locked = True
-            await inter.response.edit_message(embed=build_map_embed(self.set_idx, state), view=self)
+            # on édite le message d’origine (plus fiable que response.edit_message)
+            try:
+                await inter.message.edit(embed=build_map_embed(self.set_idx, state), view=self)
+            except Exception as e:
+                print(f"[mapvote yes] edit failed: {e}")
             await inter.followup.send("Vote enregistré ✅", ephemeral=True)
 
         async def cb_no(inter: discord.Interaction):
-            state = map_votes.get(self.set_idx)
-            if not state:
-                state = map_votes[self.set_idx] = MapVoteState(current=roll_random_map())
+            await inter.response.defer(thinking=False, ephemeral=True)
+            state = map_votes.setdefault(self.set_idx, MapVoteState(current=roll_random_map()))
             if state.locked:
-                return await inter.response.send_message("La map est déjà acceptée.", ephemeral=True)
+                return await inter.followup.send("La map est déjà acceptée.", ephemeral=True)
             uid = inter.user.id
             if uid in state.voters:
-                return await inter.response.send_message("Tu as déjà voté.", ephemeral=True)
+                return await inter.followup.send("Tu as déjà voté.", ephemeral=True)
             state.voters[uid] = "no"
             state.no += 1
             rerolled = False
@@ -589,28 +591,31 @@ class MapVoteView(discord.ui.View):
                 state.current = roll_random_map(exclude=old)
                 state.voters.clear(); state.yes = 0; state.no = 0; state.locked = False
                 rerolled = True
-            await inter.response.edit_message(embed=build_map_embed(self.set_idx, state), view=self)
-            if rerolled:
-                await inter.followup.send("❌ Refusé (5 non). 🎲 Nouvelle map proposée !", ephemeral=True)
-            else:
-                await inter.followup.send("Vote enregistré ❌", ephemeral=True)
+            try:
+                await inter.message.edit(embed=build_map_embed(self.set_idx, state), view=self)
+            except Exception as e:
+                print(f"[mapvote no] edit failed: {e}")
+            await inter.followup.send("❌ Refusé (ou comptabilisé)."+(" Nouvelle map !" if rerolled else ""), ephemeral=True)
 
         async def cb_reroll(inter: discord.Interaction):
+            await inter.response.defer(thinking=False, ephemeral=True)
             if not (inter.user.guild_permissions.administrator or any(r.name.lower()=="orga pp" for r in inter.user.roles)):
-                return await inter.response.send_message("Réservé aux **Orga PP** / Admin.", ephemeral=True)
-            state = map_votes.get(self.set_idx)
-            if not state:
-                state = map_votes[self.set_idx] = MapVoteState(current=roll_random_map())
+                return await inter.followup.send("Réservé aux **Orga PP** / Admin.", ephemeral=True)
+            state = map_votes.setdefault(self.set_idx, MapVoteState(current=roll_random_map()))
             old = state.current
             state.current = roll_random_map(exclude=old)
             state.voters.clear(); state.yes = 0; state.no = 0; state.locked = False
-            await inter.response.edit_message(embed=build_map_embed(self.set_idx, state), view=self)
+            try:
+                await inter.message.edit(embed=build_map_embed(self.set_idx, state), view=self)
+            except Exception as e:
+                print(f"[mapvote reroll] edit failed: {e}")
             await inter.followup.send("🎲 Nouvelle map proposée.", ephemeral=True)
 
         b_yes.callback = cb_yes
         b_no.callback  = cb_no
         b_reroll.callback = cb_reroll
         self.add_item(b_yes); self.add_item(b_no); self.add_item(b_reroll)
+
 
 async def ensure_mapvote_panel_once(chat: discord.TextChannel, set_idx: int):
     title = f"🗺️ Roulette map — Partie {set_idx}"

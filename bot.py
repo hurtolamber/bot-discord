@@ -494,8 +494,27 @@ VALORANT_MAPS = [
     "Ascent","Bind","Haven","Split","Lotus","Sunset","Icebox","Breeze","Pearl","Fracture","Corrode","Abyss"
 ]
 
+# --- Images des maps ---
 def map_image_url(name: str) -> str:
-    # Placeholder lisible partout (remplace par tes liens d’images)
+    """
+    Retourne l'URL d'image pour la map.
+    Priorité :
+    1) MAP_IMAGES[name] si défini
+    2) MAP_BASE_URL/<name>.webp (raw GitHub) si MAP_BASE_URL existe
+    3) Fallback placeholder lisible
+    """
+    import os
+    # 1) mapping direct
+    if name in MAP_IMAGES and MAP_IMAGES[name]:
+        return MAP_IMAGES[name]
+
+    # 2) base GitHub (ou autre) fournie via env
+    base = os.getenv("MAP_BASE_URL", "").rstrip("/")
+    if base:
+        # Tes fichiers sont en .webp
+        return f"{base}/{name}.webp"
+
+    # 3) fallback visuel si rien n'est configuré
     return f"https://dummyimage.com/1280x640/111827/ffffff&text={name.replace(' ', '%20')}"
 
 @dataclass

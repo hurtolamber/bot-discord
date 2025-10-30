@@ -1,5 +1,5 @@
 
-# Bot Discord 5v5 – Parties Perso
+
 
 Fonctions principales :
 - `/setup` : crée les **rôles**, **catégories** et **salons** (texte + vocaux de préparation).
